@@ -184,13 +184,13 @@ class FloatingService : Service(), OverlayView.Host {
         val view = TextView(this).apply {
             text = "文"
             setTextColor(Color.WHITE)
-            textSize = 22f
+            textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
         setBubbleColor(view, false)
 
-        val lp = layoutParams(px(52), px(52), WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).apply {
+        val lp = layoutParams(px(26), px(26), WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).apply {
             gravity = Gravity.TOP or Gravity.START
             x = px(16)
             y = px(240)
