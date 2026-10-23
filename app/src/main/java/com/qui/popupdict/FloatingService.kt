@@ -54,6 +54,8 @@ import kotlin.math.min
  *  - Giữ 1 từ: Gemini dịch cả câu chứa từ đó
  *  - Kéo qua nhiều từ: Gemini dịch đoạn vừa kéo
  * Bấm lại từ/câu đó (hoặc nút ›) để tắt popup, nhiều popup cùng lúc.
+ * Nghĩa của TỪ được lưu vĩnh viễn (TranslationStore): lần sau chạm lại là hiện ngay, khỏi gọi Gemini.
+ * Nút 🔁 = bỏ nghĩa cũ, gọi Gemini dịch lại với ngữ cảnh hiện tại rồi ghi đè.
  * Bấm bong bóng lần nữa -> tắt lớp phủ + tắt hết popup.
  * Thứ tự z (dưới -> trên): lớp phủ < bong bóng < popup.
  */
@@ -129,6 +131,7 @@ class FloatingService : Service(), OverlayView.Host {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         startAsForeground()   // phải gọi trước getMediaProjection (Android 14+)
         running = true
+        TranslationStore.preload(this)   // đọc kho nghĩa đã lưu ở thread nền
     }
 
     @Suppress("DEPRECATION")
@@ -524,6 +527,8 @@ class FloatingService : Service(), OverlayView.Host {
         val promptTv = chip("")
         promptTv.maxWidth = px(120)
         promptTv.setOnClickListener { cyclePrompt(p) }
+        val reloadTv = chip("🔁")
+        reloadTv.setOnClickListener { fillQuery(p, force = true) }
         val copyTv = chip("Chép")
         copyTv.setOnClickListener { copyText(p.buf.toString()) }
         val closeTv = chip("›")
@@ -534,7 +539,7 @@ class FloatingService : Service(), OverlayView.Host {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val views = if (mode == MODE_NOTE) listOf(closeTv) else listOf(promptTv, copyTv, closeTv)
+            val views = if (mode == MODE_NOTE) listOf(closeTv) else listOf(promptTv, reloadTv, copyTv, closeTv)
             for (v in views) {
                 addView(v, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
@@ -661,11 +666,25 @@ class FloatingService : Service(), OverlayView.Host {
         .replace(Regex("(?m)^[ \\t]*[*-][ \\t]+"), "• ")
         .trim()
 
-    private fun fillQuery(p: Pop) {
+    // force = true (nút 🔁): bỏ qua nghĩa đã lưu và cache, gọi Gemini dịch lại rồi ghi đè
+    private fun fillQuery(p: Pop, force: Boolean = false) {
         val list = promptsFor(p.mode)
         val pr = list[idxFor(p.mode).coerceIn(0, list.size - 1)]
         p.promptTv.text = pr.name + " ▾"
         p.buf.setLength(0)
+
+        // Chỉ lưu vĩnh viễn nghĩa của TỪ (theo từ + tên prompt). Câu/đoạn kéo chọn thì không lưu.
+        val saveKey = if (p.mode == MODE_WORD) TranslationStore.key(pr.name, p.query) else null
+        if (!force && saveKey != null) {
+            val saved = TranslationStore.get(this, saveKey)
+            if (saved != null) {
+                p.job++   // hủy lượt gọi đang chạy (nếu có)
+                p.buf.append(saved)
+                p.bodyTv.text = saved
+                relayout(p)
+                return
+            }
+        }
 
         val key = Prefs.key(this)
         val model = Prefs.model(this)
@@ -679,7 +698,7 @@ class FloatingService : Service(), OverlayView.Host {
 
         val content = buildContent(pr, p.query, p.context)
         val ck = "$model|$think|$content"
-        val hit = cache[ck]
+        val hit = if (force) null else cache[ck]
         if (hit != null) {
             p.job++
             p.buf.append(hit)
@@ -709,7 +728,9 @@ class FloatingService : Service(), OverlayView.Host {
                             p.bodyTv.text = "(không có nội dung trả về)"
                             relayout(p)
                         } else {
-                            cache[ck] = clean(p.buf.toString())
+                            val done = clean(p.buf.toString())
+                            cache[ck] = done
+                            if (saveKey != null) TranslationStore.put(this@FloatingService, saveKey, done)
                         }
                     }
                 }
